@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.4.0">
+<meta name="app-version" content="0.5.0">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -899,14 +899,47 @@ function renderTab3(){
 }
 
 /* ---------- タブ切替 ---------- */
+const TAB_IDS = ['1','2','3'];
+function switchTab(tabId){
+  document.querySelectorAll('.tabbar button').forEach(b=>b.classList.toggle('active', b.dataset.tab === tabId));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active', p.dataset.panel === tabId));
+}
 document.querySelectorAll('.tabbar button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tabbar button').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
-    document.querySelector(`.tab-panel[data-panel="${btn.dataset.tab}"]`).classList.add('active');
-  });
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 });
+
+function anyModalOpen(){
+  return !!document.querySelector('.modal-overlay.open');
+}
+function currentTabId(){
+  return document.querySelector('.tabbar button.active').dataset.tab;
+}
+
+/* main全体でのスワイプでタブ切替(モーダル表示中・カレンダーの月切替スワイプ中は対象外) */
+(function(){
+  const mainEl = document.querySelector('main');
+  let startX = null, startY = null, startedInCalGrid = false;
+
+  mainEl.addEventListener('touchstart', e => {
+    if(anyModalOpen()) { startX = null; return; }
+    startedInCalGrid = !!e.target.closest('#calGrid');
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+  });
+  mainEl.addEventListener('touchend', e => {
+    if(startX === null || startedInCalGrid || anyModalOpen()){ startX = null; return; }
+    const dx = e.changedTouches[0].clientX - startX;
+    const dy = e.changedTouches[0].clientY - startY;
+    // 横方向優位のスワイプのみをタブ切替とみなす(縦スクロールと誤反応しないように)
+    if(Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5){
+      const idx = TAB_IDS.indexOf(currentTabId());
+      let nextIdx = dx < 0 ? idx + 1 : idx - 1;
+      nextIdx = Math.max(0, Math.min(TAB_IDS.length - 1, nextIdx));
+      if(nextIdx !== idx) switchTab(TAB_IDS[nextIdx]);
+    }
+    startX = null;
+  });
+})();
 
 /* ---------- 全体描画 ---------- */
 function renderAll(){

@@ -1,4 +1,4 @@
-# spending-log# Spending-Log
+# Spending-Log
 
 スマホ利用を想定した、カレンダーベースの簡易家計簿PWA。
 
