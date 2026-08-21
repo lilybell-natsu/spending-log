@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.5.2">
+<meta name="app-version" content="0.5.3">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -350,10 +350,13 @@ const CATS = {
 };
 const CAT_ORDER = ['光熱費','生活費','雑費'];
 const STORAGE_KEY = 'spendingLogRecords_v1';
-// スワイプ距離のしきい値: カレンダー内で始まったスワイプは、
-// この距離未満なら月切替・以上ならタブ切替とみなす(通常のタブ切替しきい値より大きく設定)
-const CAL_MONTH_SWIPE_MAX = 130;
+// スワイプ関連のしきい値。
+// カレンダー内で始まったスワイプは、画面端付近(EDGE_ZONE以内)から始まった場合のみ
+// タブ切替とみなし、それ以外(グリッド中央側)は月切替とする。
+// 距離ではなく開始位置で区別するため、どちらも小さいしきい値で素早く反応させられる。
+const CAL_MONTH_SWIPE_MIN = 50;
 const TAB_SWIPE_MIN = 60;
+const EDGE_ZONE = 32;
 
 /* ---------- データ層 ---------- */
 function loadRecords(){
@@ -507,22 +510,8 @@ document.getElementById('nextMonth').addEventListener('click', () => {
   viewMonth++; if(viewMonth>12){ viewMonth=1; viewYear++; }
   renderAll();
 });
-// スワイプ対応(簡易)
-(function(){
-  let touchStartX = null;
-  const grid = document.getElementById('calGrid');
-  grid.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; });
-  grid.addEventListener('touchend', e => {
-    if(touchStartX === null) return;
-    const dx = e.changedTouches[0].clientX - touchStartX;
-    // CAL_MONTH_SWIPE_MAX以上の大きなスワイプはタブ切替に譲る(main側のハンドラで処理)
-    if(Math.abs(dx) > 50 && Math.abs(dx) < CAL_MONTH_SWIPE_MAX){
-      if(dx < 0) document.getElementById('nextMonth').click();
-      else document.getElementById('prevMonth').click();
-    }
-    touchStartX = null;
-  });
-})();
+// カレンダー内のスワイプによる月切替は、main全体のスワイプハンドラ(下部)に統合済み。
+// (画面端付近から始まったスワイプはタブ切替、それ以外は月切替として処理される)
 
 /* ---------- 入力/編集モーダル ---------- */
 const entryModal = document.getElementById('entryModal');
@@ -920,27 +909,39 @@ function currentTabId(){
   return document.querySelector('.tabbar button.active').dataset.tab;
 }
 
-/* main全体でのスワイプでタブ切替。
-   カレンダー内(#calGrid)で始まったスワイプは月切替と競合するため、
-   CAL_MONTH_SWIPE_MAX未満の通常距離は対象外(月切替を優先)とし、
-   それ以上の大きめのスワイプのみタブ切替として扱う。モーダル表示中は対象外。 */
+/* main全体でのスワイプ処理(タブ切替 + カレンダーの月切替)。
+   カレンダー内(#calGrid)で始まったスワイプは、月切替と競合しないよう
+   開始位置で区別する: 画面端付近(EDGE_ZONE以内)ならタブ切替、
+   それ以外(グリッド中央側)なら月切替として扱う。
+   カレンダー外で始まったスワイプは常にタブ切替。モーダル表示中は対象外。
+   距離ではなく開始位置で区別するため、しきい値はどちらも小さく素早く反応する。 */
 (function(){
   const mainEl = document.querySelector('main');
-  let startX = null, startY = null, startedInCalGrid = false;
+  let startX = null, startY = null, startedInCalGrid = false, startedNearEdge = false;
 
   mainEl.addEventListener('touchstart', e => {
     if(anyModalOpen()) { startX = null; return; }
-    startedInCalGrid = !!e.target.closest('#calGrid');
+    const rect = mainEl.getBoundingClientRect();
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
+    startedInCalGrid = !!e.target.closest('#calGrid');
+    startedNearEdge = (startX - rect.left <= EDGE_ZONE) || (rect.right - startX <= EDGE_ZONE);
   });
   mainEl.addEventListener('touchend', e => {
     if(startX === null || anyModalOpen()){ startX = null; return; }
     const dx = e.changedTouches[0].clientX - startX;
     const dy = e.changedTouches[0].clientY - startY;
-    const minDist = startedInCalGrid ? CAL_MONTH_SWIPE_MAX : TAB_SWIPE_MIN;
-    // 横方向優位のスワイプのみをタブ切替とみなす(縦スクロールと誤反応しないように)
-    if(Math.abs(dx) > minDist && Math.abs(dx) > Math.abs(dy) * 1.5){
+    // 横方向優位のスワイプのみを対象とする(縦スクロールと誤反応しないように)
+    if(Math.abs(dx) <= Math.abs(dy) * 1.5){ startX = null; return; }
+
+    if(startedInCalGrid && !startedNearEdge){
+      // カレンダー中央側のスワイプ → 月切替
+      if(Math.abs(dx) > CAL_MONTH_SWIPE_MIN){
+        if(dx < 0) document.getElementById('nextMonth').click();
+        else document.getElementById('prevMonth').click();
+      }
+    } else if(Math.abs(dx) > TAB_SWIPE_MIN){
+      // カレンダー外、または画面端付近から始まったスワイプ → タブ切替
       const idx = TAB_IDS.indexOf(currentTabId());
       let nextIdx = dx < 0 ? idx + 1 : idx - 1;
       nextIdx = Math.max(0, Math.min(TAB_IDS.length - 1, nextIdx));
