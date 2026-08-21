@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.5.4">
+<meta name="app-version" content="0.5.5">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -61,12 +61,17 @@
   .swipe-zone{
     position:fixed; left:0; right:0; bottom:0; z-index:5;
     height:56px; padding-bottom:env(safe-area-inset-bottom);
-    display:flex; align-items:center; justify-content:center;
+    display:flex; align-items:center; justify-content:center; gap:14px;
     background:var(--surface); border-top:0.5px solid var(--border);
   }
   .swipe-zone .swipe-handle{
     width:36px; height:4px; border-radius:2px; background:var(--border-strong);
   }
+  .swipe-zone .swipe-arrow{
+    font-size:16px; color:var(--text-sub); line-height:1; width:16px; text-align:center;
+    transition:opacity .15s;
+  }
+  .swipe-zone .swipe-arrow.disabled{ opacity:0.25; }
 
   /* タブバー */
   nav.tabbar{
@@ -280,7 +285,11 @@
 </main>
 
 <!-- 画面下部のスワイプ専用ゾーン(左右スワイプでタブ切替。全タブ共通) -->
-<div class="swipe-zone" id="swipeZone" aria-hidden="true"><span class="swipe-handle"></span></div>
+<div class="swipe-zone" id="swipeZone" aria-hidden="true">
+  <span class="swipe-arrow" id="swipeArrowPrev">‹</span>
+  <span class="swipe-handle"></span>
+  <span class="swipe-arrow" id="swipeArrowNext">›</span>
+</div>
 
 <!-- 入力/編集モーダル -->
 <div class="modal-overlay" id="entryModal">
@@ -924,10 +933,18 @@ const TAB_IDS = ['1','2','3'];
 function switchTab(tabId){
   document.querySelectorAll('.tabbar button').forEach(b=>b.classList.toggle('active', b.dataset.tab === tabId));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active', p.dataset.panel === tabId));
+  updateSwipeArrows();
 }
 document.querySelectorAll('.tabbar button').forEach(btn => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 });
+
+/* スワイプゾーンの矢印: 現在のタブ位置に応じて、遷移できない側の矢印をグレーアウト */
+function updateSwipeArrows(){
+  const idx = TAB_IDS.indexOf(currentTabId());
+  document.getElementById('swipeArrowPrev').classList.toggle('disabled', idx <= 0);
+  document.getElementById('swipeArrowNext').classList.toggle('disabled', idx >= TAB_IDS.length - 1);
+}
 
 function anyModalOpen(){
   return !!document.querySelector('.modal-overlay.open');
@@ -970,6 +987,7 @@ function renderAll(){
   renderTab3();
 }
 renderAll();
+updateSwipeArrows();
 
 /* ---------- PWA: service worker登録 ---------- */
 if('serviceWorker' in navigator){
