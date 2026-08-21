@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.5.0">
+<meta name="app-version" content="0.5.1">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -350,6 +350,10 @@ const CATS = {
 };
 const CAT_ORDER = ['光熱費','生活費','雑費'];
 const STORAGE_KEY = 'spendingLogRecords_v1';
+// スワイプ距離のしきい値: カレンダー内で始まったスワイプは、
+// この距離未満なら月切替・以上ならタブ切替とみなす(通常のタブ切替しきい値より大きく設定)
+const CAL_MONTH_SWIPE_MAX = 130;
+const TAB_SWIPE_MIN = 60;
 
 /* ---------- データ層 ---------- */
 function loadRecords(){
@@ -511,7 +515,8 @@ document.getElementById('nextMonth').addEventListener('click', () => {
   grid.addEventListener('touchend', e => {
     if(touchStartX === null) return;
     const dx = e.changedTouches[0].clientX - touchStartX;
-    if(Math.abs(dx) > 50){
+    // CAL_MONTH_SWIPE_MAX以上の大きなスワイプはタブ切替に譲る(main側のハンドラで処理)
+    if(Math.abs(dx) > 50 && Math.abs(dx) < CAL_MONTH_SWIPE_MAX){
       if(dx < 0) document.getElementById('nextMonth').click();
       else document.getElementById('prevMonth').click();
     }
@@ -915,7 +920,10 @@ function currentTabId(){
   return document.querySelector('.tabbar button.active').dataset.tab;
 }
 
-/* main全体でのスワイプでタブ切替(モーダル表示中・カレンダーの月切替スワイプ中は対象外) */
+/* main全体でのスワイプでタブ切替。
+   カレンダー内(#calGrid)で始まったスワイプは月切替と競合するため、
+   CAL_MONTH_SWIPE_MAX未満の通常距離は対象外(月切替を優先)とし、
+   それ以上の大きめのスワイプのみタブ切替として扱う。モーダル表示中は対象外。 */
 (function(){
   const mainEl = document.querySelector('main');
   let startX = null, startY = null, startedInCalGrid = false;
@@ -927,11 +935,12 @@ function currentTabId(){
     startY = e.touches[0].clientY;
   });
   mainEl.addEventListener('touchend', e => {
-    if(startX === null || startedInCalGrid || anyModalOpen()){ startX = null; return; }
+    if(startX === null || anyModalOpen()){ startX = null; return; }
     const dx = e.changedTouches[0].clientX - startX;
     const dy = e.changedTouches[0].clientY - startY;
+    const minDist = startedInCalGrid ? CAL_MONTH_SWIPE_MAX : TAB_SWIPE_MIN;
     // 横方向優位のスワイプのみをタブ切替とみなす(縦スクロールと誤反応しないように)
-    if(Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5){
+    if(Math.abs(dx) > minDist && Math.abs(dx) > Math.abs(dy) * 1.5){
       const idx = TAB_IDS.indexOf(currentTabId());
       let nextIdx = dx < 0 ? idx + 1 : idx - 1;
       nextIdx = Math.max(0, Math.min(TAB_IDS.length - 1, nextIdx));
