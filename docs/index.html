@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.5.7">
+<meta name="app-version" content="0.6.0">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -127,6 +127,20 @@
   .modal-head button.close{background:none; border:0; font-size:18px; color:var(--text-sub);}
   .date-edit{display:flex; align-items:center; gap:6px; margin-bottom:14px;}
   .date-edit input[type=date]{flex:1; border:0.5px solid var(--border-strong); border-radius:var(--radius); padding:8px 10px;}
+
+  /* ===== レシート読込(OCR) ===== */
+  .receipt-row{margin-bottom:8px;}
+  .receipt-btn{
+    width:100%; padding:10px; border-radius:var(--radius);
+    border:0.5px dashed var(--border-strong); background:transparent; color:var(--text-sub); font-size:12px;
+  }
+  .receipt-btn:disabled{opacity:0.5;}
+  .receipt-preview{
+    display:flex; align-items:center; gap:10px; margin-bottom:10px;
+    border:0.5px solid var(--border); border-radius:var(--radius); padding:8px;
+  }
+  .receipt-preview img{width:48px; height:48px; object-fit:cover; border-radius:6px; flex-shrink:0; background:var(--bg);}
+  .receipt-preview .receipt-status{font-size:11px; color:var(--text-sub); line-height:1.4;}
 
   .cat-row, .subcat-row{display:flex; gap:6px; margin-bottom:10px;}
   .cat-row button, .subcat-row button{
@@ -304,6 +318,14 @@
     </div>
     <div class="date-edit">
       <input type="date" id="dateInput">
+    </div>
+    <div class="receipt-row">
+      <button type="button" class="receipt-btn" id="receiptBtn">📷 レシート読込(金額を自動入力)</button>
+      <input type="file" accept="image/*" capture="environment" id="receiptFileInput" style="display:none;">
+    </div>
+    <div class="receipt-preview" id="receiptPreview" style="display:none;">
+      <img id="receiptThumb" alt="レシート画像プレビュー">
+      <span class="receipt-status" id="receiptStatus"></span>
     </div>
     <div class="cat-row" id="catRow"></div>
     <div class="subcat-row" id="subcatRow"></div>
@@ -569,12 +591,16 @@ function openEntryModal(dateStr, record, presetCat){
   document.getElementById('memoCount').textContent = (record?.memo?.length||0) + '/50';
   document.getElementById('deleteBtn').style.display = editingId ? 'block' : 'none';
 
+  resetReceiptUI();
   renderCatRow();
   renderSubcatRow();
   checkFormValid();
   entryModal.classList.add('open');
 }
-document.getElementById('closeModal').addEventListener('click', () => entryModal.classList.remove('open'));
+document.getElementById('closeModal').addEventListener('click', () => {
+  entryModal.classList.remove('open');
+  if(receiptImageUrl){ URL.revokeObjectURL(receiptImageUrl); receiptImageUrl = null; }
+});
 
 function renderCatRow(){
   const row = document.getElementById('catRow');
@@ -627,6 +653,100 @@ function checkFormValid(){
   }
 }
 
+/* ---------- レシート読込(OCR) ----------
+   端末内(ブラウザのWASM)でOCRを実行するTesseract.jsをCDNから動的に読み込む。
+   画像は端末外に送信しない。読み取った金額は必ずユーザーが確認・修正できる
+   状態にするのみで、自動記録はしない。詳細は spec/receipt-ocr.md を参照。 */
+const TESSERACT_CDN_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+let tesseractLoadPromise = null;
+let receiptImageUrl = null; // サムネイル表示用のobject URL(モーダルを閉じたら破棄)
+
+function loadTesseract(){
+  if(window.Tesseract) return Promise.resolve();
+  if(tesseractLoadPromise) return tesseractLoadPromise;
+  tesseractLoadPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = TESSERACT_CDN_URL;
+    s.onload = resolve;
+    s.onerror = () => { tesseractLoadPromise = null; reject(new Error('script load failed')); };
+    document.head.appendChild(s);
+  });
+  return tesseractLoadPromise;
+}
+
+/* OCRで得たテキストから金額候補を抽出する。
+   「合計」等のキーワード行を優先し、無ければ妥当な範囲の数値の最大値を採用する。 */
+function extractAmountFromText(text){
+  const normalized = text.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  const lines = normalized.split(/\n/);
+  const keywordPriority = ['合計', '合計金額', 'お会計', '総合計'];
+  for(const kw of keywordPriority){
+    for(const line of lines){
+      if(line.includes(kw)){
+        const m = line.match(/([0-9][0-9,]{1,})/);
+        if(m){
+          const v = parseInt(m[1].replace(/,/g,''), 10);
+          if(v >= 10 && v <= 1000000) return v;
+        }
+      }
+    }
+  }
+  const nums = [...normalized.matchAll(/([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{2,6})/g)]
+    .map(m => parseInt(m[1].replace(/,/g,''), 10))
+    .filter(n => n >= 10 && n <= 1000000);
+  if(nums.length) return Math.max(...nums);
+  return null;
+}
+
+function setReceiptStatus(msg){
+  document.getElementById('receiptStatus').textContent = msg;
+}
+function resetReceiptUI(){
+  document.getElementById('receiptFileInput').value = '';
+  document.getElementById('receiptPreview').style.display = 'none';
+  document.getElementById('receiptBtn').disabled = false;
+  document.getElementById('receiptBtn').textContent = '📷 レシート読込(金額を自動入力)';
+  if(receiptImageUrl){ URL.revokeObjectURL(receiptImageUrl); receiptImageUrl = null; }
+}
+
+document.getElementById('receiptBtn').addEventListener('click', () => {
+  document.getElementById('receiptFileInput').click();
+});
+
+document.getElementById('receiptFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if(!file) return;
+
+  if(receiptImageUrl) URL.revokeObjectURL(receiptImageUrl);
+  receiptImageUrl = URL.createObjectURL(file);
+  document.getElementById('receiptThumb').src = receiptImageUrl;
+  document.getElementById('receiptPreview').style.display = 'flex';
+
+  const btn = document.getElementById('receiptBtn');
+  btn.disabled = true;
+  btn.textContent = '読取中…';
+  setReceiptStatus('読取中…(数秒かかります)');
+
+  try{
+    await loadTesseract();
+    const { data: { text } } = await Tesseract.recognize(file, 'jpn');
+    const amount = extractAmountFromText(text);
+    if(amount){
+      document.getElementById('amountInput').value = amount;
+      checkFormValid();
+      setReceiptStatus(`金額を読み取りました: ${fmtYen(amount)}(内容を確認してください)`);
+    } else {
+      setReceiptStatus('金額を読み取れませんでした。手入力してください。');
+    }
+  }catch(err){
+    console.error('receipt OCR failed', err);
+    setReceiptStatus('読み取りに失敗しました(通信状況をご確認のうえ、手入力してください)。');
+  }finally{
+    btn.disabled = false;
+    btn.textContent = '📷 レシート読込(金額を自動入力)';
+  }
+});
+
 document.getElementById('recordBtn').addEventListener('click', () => {
   const date = document.getElementById('dateInput').value;
   const amount = Math.floor(Number(document.getElementById('amountInput').value));
@@ -651,6 +771,7 @@ document.getElementById('recordBtn').addEventListener('click', () => {
 
   saveRecords(records);
   entryModal.classList.remove('open');
+  if(receiptImageUrl){ URL.revokeObjectURL(receiptImageUrl); receiptImageUrl = null; }
 });
 
 /* 削除 */
