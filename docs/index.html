@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.5.6">
+<meta name="app-version" content="0.5.7">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -38,8 +38,8 @@
     font-size:16px;
     -webkit-text-size-adjust:100%;
     /* 画面下部のスワイプ専用ゾーン(.swipe-zone)の分だけ余白を確保
-       (ゾーンの浮かせ幅10px + 高さ40px + 上側の余白分) */
-    padding-bottom:calc(66px + env(safe-area-inset-bottom));
+       (ゾーンの浮かせ幅24px + 高さ56px + 上側の余白分) */
+    padding-bottom:calc(92px + env(safe-area-inset-bottom));
   }
   input,textarea,select{
     font-size:16px; /* Safari拡大防止の要 */
@@ -63,8 +63,8 @@
      干渉しないよう、最下端には張り付けずに少し上に浮かせて配置する。 */
   .swipe-zone{
     position:fixed; left:12px; right:12px; z-index:5;
-    bottom:calc(10px + env(safe-area-inset-bottom));
-    height:40px;
+    bottom:calc(24px + env(safe-area-inset-bottom));
+    height:56px;
     display:flex; align-items:center; justify-content:center; gap:14px;
     background:var(--surface); border:0.5px solid var(--border); border-radius:var(--radius);
   }
