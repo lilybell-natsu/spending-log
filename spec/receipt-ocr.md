@@ -1,7 +1,7 @@
 # レシート読取機能 仕様書
 
 作成日: 2026-08-22
-ステータス: 実装完了(v0.6.0、`docs/index.html` に実装済み)
+ステータス: 実装完了(v0.6.1、`docs/index.html` に実装済み)
 
 ## 1. 目的・ユーザーフロー
 
@@ -64,40 +64,54 @@
 抽出ロジックと組み合わせることで実用的な精度が得られることを確認した。
 (文字部分の認識は完全ではない=店名や品目名の誤認識はあるが、金額抽出には影響しない)
 
-## 4. 金額抽出ロジック
+## 4. 金額抽出ロジック(v0.6.1で座標ベースに変更)
 
-OCRで得たテキストから、以下の優先順位で金額候補を抽出する。
+初版(v0.6.0)ではOCRテキストの改行(行)単位でキーワード行を探す方式だったが、
+ラベルと金額の間に大きな空白があるレイアウトで行がずれることがあり精度が低かった。
+v0.6.1では、OCRが返す**単語ごとの座標(bbox)**を使い、「合計」の文言と**同じ行
+(Y座標が近い)**にある金額を最優先で抽出する方式に変更した。
+「一番大きい数字を採用する」のではなく、あくまで「合計の横にある金額」を優先する。
 
 1. 全角数字を半角に正規化
-2. キーワード優先探索: `合計` `合計金額` `お会計` `総合計` を含む行を探し、
-   その行から数値(カンマ区切り含む)を抽出。複数キーワードがヒットする場合は
-   上記の優先順位順に採用(「小計」より「合計」を優先=消費税込みの総額を優先)
-3. キーワードが見つからない場合のフォールバック: テキスト中の数値のうち
-   10〜1,000,000の範囲にあるものの最大値を採用(合計金額はレシート内で
-   最大の数値であることが多いという経験則)
-4. 該当なしの場合は金額欄を空のままとし、「金額を読み取れませんでした。
+2. `data.words`(Tesseract.jsが返す単語ごとの認識結果、各々`bbox:{x0,y0,x1,y1}`を持つ)
+   から `合計` `合計金額` `総合計` `お会計` のいずれかを含む単語を探す
+3. そのキーワード単語のY座標(中心)を基準に、同程度のY座標(同じ行とみなせる
+   許容誤差内)にある他の単語を左から右の順に確認し、最初に見つかった
+   金額らしい数値(10〜1,000,000の範囲)を採用する
+4. 座標データが無い、または上記で見つからない場合のフォールバックとして、
+   OCRテキストの改行(行)単位でのキーワード一致→それでも無ければ
+   テキスト中の数値の最大値、という初版(v0.6.0)のロジックを使う
+5. 該当なしの場合は金額欄を空のままとし、「金額を読み取れませんでした。
    手入力してください」を表示
 
 ```js
-function extractAmountFromText(text){
-  const normalized = text.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
-  const lines = normalized.split(/\n/);
-  const keywordPriority = ['合計', '合計金額', 'お会計', '総合計'];
-  for(const kw of keywordPriority){
-    for(const line of lines){
-      if(line.includes(kw)){
-        const m = line.match(/([0-9][0-9,]{1,})/);
-        if(m) return parseInt(m[1].replace(/,/g,''), 10);
-      }
+// 座標(bbox)ベースの抽出(最優先)
+function extractAmountFromWords(words){
+  if(!words || !words.length) return null;
+  const rowCenter = w => (w.bbox.y0 + w.bbox.y1) / 2;
+  const rowHeight = w => (w.bbox.y1 - w.bbox.y0);
+  const keywordWords = words.filter(w => w.text && RECEIPT_KEYWORDS.some(kw => fullWidthDigitsToHalf(w.text).includes(kw)));
+  for(const kw of keywordWords){
+    const kwY = rowCenter(kw);
+    const tolerance = rowHeight(kw) * 0.6 + 4;
+    const rowWords = words
+      .filter(w => w !== kw && Math.abs(rowCenter(w) - kwY) <= tolerance)
+      .sort((a,b) => a.bbox.x0 - b.bbox.x0);
+    for(const w of rowWords){
+      const amount = parseAmountToken(w.text);
+      if(amount !== null) return amount;
     }
   }
-  const nums = [...normalized.matchAll(/([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{2,6})/g)]
-    .map(m => parseInt(m[1].replace(/,/g,''), 10))
-    .filter(n => n >= 10 && n <= 1000000);
-  if(nums.length) return Math.max(...nums);
   return null;
 }
 ```
+
+### 検証結果(v0.6.1)
+
+「小計¥1,200」「消費税¥96」「合計¥1,296」「お預り¥2,000」「お釣り¥704」を
+ラベルと金額を大きく離して配置した合成レシート画像で検証。
+**お預り(2,000)が合計(1,296)より大きい値であっても、正しく「合計」行の
+1,296を抽出できることを確認**(単純な最大値採用ではないことの実証)。
 
 ## 5. UI変更点(実装時の想定)
 

@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.6.0">
+<meta name="app-version" content="0.6.1">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -674,20 +674,51 @@ function loadTesseract(){
   return tesseractLoadPromise;
 }
 
-/* OCRで得たテキストから金額候補を抽出する。
-   「合計」等のキーワード行を優先し、無ければ妥当な範囲の数値の最大値を採用する。 */
+const RECEIPT_KEYWORDS = ['合計', '合計金額', '総合計', 'お会計'];
+function fullWidthDigitsToHalf(s){
+  return s.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+}
+function parseAmountToken(text){
+  const m = fullWidthDigitsToHalf(text).match(/([0-9][0-9,]{1,})/);
+  if(!m) return null;
+  const v = parseInt(m[1].replace(/,/g,''), 10);
+  return (v >= 10 && v <= 1000000) ? v : null;
+}
+
+/* レシートは必ず「合計」の文言があり、その横(同じ行=同じY座標帯)に金額が
+   書かれているという前提で、OCRの単語ごとの座標(bbox)を使って
+   「合計」と同じ行にある金額を最優先で抽出する。
+   (テキストの改行位置だけに頼ると、ラベルと金額の間の大きな空白でずれることがあるため) */
+function extractAmountFromWords(words){
+  if(!words || !words.length) return null;
+  const rowCenter = w => (w.bbox.y0 + w.bbox.y1) / 2;
+  const rowHeight = w => (w.bbox.y1 - w.bbox.y0);
+  const keywordWords = words.filter(w => w.text && RECEIPT_KEYWORDS.some(kw => fullWidthDigitsToHalf(w.text).includes(kw)));
+  for(const kw of keywordWords){
+    const kwY = rowCenter(kw);
+    const tolerance = rowHeight(kw) * 0.6 + 4; // 同じ行とみなす許容誤差
+    const rowWords = words
+      .filter(w => w !== kw && Math.abs(rowCenter(w) - kwY) <= tolerance)
+      .sort((a,b) => a.bbox.x0 - b.bbox.x0); // 左から右の順に確認
+    for(const w of rowWords){
+      const amount = parseAmountToken(w.text);
+      if(amount !== null) return amount;
+    }
+  }
+  return null;
+}
+
+/* フォールバック(単語の座標情報が無い場合、または上記で見つからなかった場合)。
+   テキストの改行(行)単位で「合計」等のキーワード行を探し、無ければ
+   妥当な範囲の数値の最大値を採用する。座標ベースの判定より精度は落ちる。 */
 function extractAmountFromText(text){
-  const normalized = text.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  const normalized = fullWidthDigitsToHalf(text);
   const lines = normalized.split(/\n/);
-  const keywordPriority = ['合計', '合計金額', 'お会計', '総合計'];
-  for(const kw of keywordPriority){
+  for(const kw of RECEIPT_KEYWORDS){
     for(const line of lines){
       if(line.includes(kw)){
-        const m = line.match(/([0-9][0-9,]{1,})/);
-        if(m){
-          const v = parseInt(m[1].replace(/,/g,''), 10);
-          if(v >= 10 && v <= 1000000) return v;
-        }
+        const amount = parseAmountToken(line);
+        if(amount !== null) return amount;
       }
     }
   }
@@ -729,8 +760,9 @@ document.getElementById('receiptFileInput').addEventListener('change', async (e)
 
   try{
     await loadTesseract();
-    const { data: { text } } = await Tesseract.recognize(file, 'jpn');
-    const amount = extractAmountFromText(text);
+    const { data } = await Tesseract.recognize(file, 'jpn');
+    // 「合計」と同じ行(座標ベース)の金額を最優先。見つからなければテキスト行ベースにフォールバック
+    const amount = extractAmountFromWords(data.words) ?? extractAmountFromText(data.text);
     if(amount){
       document.getElementById('amountInput').value = amount;
       checkFormValid();
