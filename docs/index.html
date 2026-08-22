@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.8.1">
+<meta name="app-version" content="0.8.2">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -374,7 +374,7 @@
       <span>読み取る範囲を選択</span>
       <button class="close" id="closeCropModal">✕</button>
     </div>
-    <p class="crop-hint">¥の金額が写るように、四隅をドラッグして範囲を調整してください(範囲内の金額候補から後で選べます)</p>
+    <p class="crop-hint">¥の金額が写るように、四隅をドラッグして範囲を調整してください(範囲内の金額候補から後で選べます)。目的の金額が候補に出ない/文字化けする場合は、範囲をその金額の行だけに絞るとうまくいくことがあります</p>
     <div class="crop-stage" id="cropStage">
       <img id="cropImage" alt="レシート画像">
       <div class="crop-mask" id="cropMaskTop"></div>
@@ -747,58 +747,71 @@ function fullWidthDigitsToHalf(s){
    詰めてから解析することでこれを防ぐ。 */
 function collapseNumberFragments(text){
   // フォントが大きい・字間が広いレシート表記(例: 強調された合計金額)では、
-  // OCRが桁ごと・カンマの前後ごとに空白を挟んで認識することがある
-  // (例: "¥5,445" → "¥ 5 , 4 4 5")。数字とカンマが空白を挟んで隣り合って
-  // いる箇所は、これ以上詰められなくなるまで繰り返し詰める。
+  // OCRが桁ごと・区切り記号ごとに空白を挟んで認識することがある
+  // (例: "¥5,445" → "¥ 5 , 4 4 5")。数字・カンマ・ピリオド(桁区切りが
+  // ピリオドに誤認識されることがあるため)が空白を挟んで隣り合っている
+  // 箇所は、これ以上詰められなくなるまで繰り返し詰める。
   let prev;
   do {
     prev = text;
-    text = text.replace(/([0-9,])[ \t　]+(?=[0-9,])/g, '$1');
+    text = text.replace(/([0-9,.])[ \t　]+(?=[0-9,.])/g, '$1');
   } while(text !== prev);
   return text;
 }
 
-/* トリミング範囲内から「¥」記号に紐づく金額をすべて列挙する。
+/* トリミング範囲内にある金額をすべて列挙する。
    「合計」等のキーワードで1つに絞り込むのではなく、範囲内に写っている
-   ¥付きの金額をすべて候補としてユーザーに提示し、どれを記録するかは
-   ユーザー自身に選んでもらう方式(仕様変更 v0.8.0)。
-   OCRは¥記号を"\"(バックスラッシュ)と誤認識することが多いため両方を許容する。 */
+   金額をすべて候補としてユーザーに提示し、どれを記録するかはユーザー
+   自身に選んでもらう方式(仕様変更 v0.8.0)。実際のレシート写真での
+   検証(learnings/receipt-ocr-patterns.md 参照)により、以下の誤認識が
+   判明しているため、それぞれ候補の取りこぼしを防ぐよう対応している:
+   - ¥記号は "\"(バックスラッシュ)のほか "W" "Y" と誤認識されることがある
+   - 桁区切りの「,」が「.」(ピリオド)と誤認識されることがある
+   - ¥記号自体が認識されず数字だけが残ることがある
+     → 桁区切り数値(1,234のような形)は¥系記号が無くても候補に含める */
 function extractAllAmountCandidates(text){
   const collapsed = collapseNumberFragments(fullWidthDigitsToHalf(text));
-  const re = /[¥\\][ \t　]*([0-9][0-9,]*)/g;
   const seen = new Set();
   const results = [];
-  let m;
-  while((m = re.exec(collapsed)) !== null){
-    const v = parseInt(m[1].replace(/,/g, ''), 10);
+  const add = (raw) => {
+    const v = parseInt(raw.replace(/[,.]/g, ''), 10);
     if(v >= 1 && v <= 1000000 && !seen.has(v)){
       seen.add(v);
       results.push(v);
     }
-  }
+  };
+  let m;
+  // ①「¥」記号(誤認識されやすい \, W, Y を含む)+ 数字
+  const reYen = /[¥\\WY][ \t　]*([0-9][0-9,.]*)/g;
+  while((m = reYen.exec(collapsed)) !== null) add(m[1]);
+  // ② ¥系記号が付いていなくても、桁区切り(,または.)を伴う数値は
+  //    金額の可能性が高いため候補に含める
+  const reGrouped = /([0-9]{1,3}(?:[,.][0-9]{3})+)/g;
+  while((m = reGrouped.exec(collapsed)) !== null) add(m[1]);
   return results;
 }
 
-/* スマホのカメラ写真は数千px四方あり、そのままOCRすると非常に時間がかかる
-   (実機のフルサイズ写真で数十秒以上)ため、長辺を上限まで縮小してから渡す。
-   画像の向きはbrowser側がEXIF情報をもとに自動補正して描画するため、
-   ここでの追加の回転補正は不要。 */
-function downscaleImageFile(file, maxSide){
+/* 画像ファイルをImage要素として読み込む(EXIFの向き情報はbrowserが自動補正)。
+   トリミング範囲を決めるための表示用途と、最終的な高解像度クロップの
+   両方の元データとして、フル解像度のまま保持しておく。 */
+function loadImageFromFile(file){
   return new Promise((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(url);
-      resolve(canvas);
-    };
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image load failed')); };
     img.src = url;
   });
+}
+/* 画像を長辺が上限を超えないよう縮小したcanvasを作る
+   (スマホのカメラ写真は数千px四方あり、そのままOCR/表示に使うと重いため)。 */
+function canvasFromImage(img, maxSide){
+  const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas;
 }
 
 function setReceiptStatus(msg){
@@ -813,6 +826,7 @@ function resetReceiptUI(){
   closeCropModal();
   closeAmountListModal();
   cropWorkCanvas = null;
+  cropOriginalImage = null;
 }
 
 document.getElementById('receiptBtn').addEventListener('click', () => {
@@ -830,7 +844,8 @@ document.getElementById('receiptFileInput').addEventListener('change', async (e)
   setReceiptStatus('範囲を選択してください');
 
   try{
-    const workCanvas = await downscaleImageFile(file, 1600);
+    cropOriginalImage = await loadImageFromFile(file);
+    const workCanvas = canvasFromImage(cropOriginalImage, 1600);
     openCropModal(workCanvas);
   }catch(err){
     console.error('receipt image load failed', err);
@@ -840,7 +855,9 @@ document.getElementById('receiptFileInput').addEventListener('change', async (e)
 
 /* ---------- レシートのトリミングUI(背景ノイズを排除し精度を上げるため、
    OCR前にユーザー自身が金額部分だけに範囲を絞れるようにする) ---------- */
-let cropWorkCanvas = null; // ダウンスケール済みの元画像(切り出し元)
+let cropWorkCanvas = null;   // トリミングUI表示用のダウンスケール済み画像
+let cropOriginalImage = null; // フル解像度の元画像。最終的な高解像度クロップの元データとして使う
+                               // (絞り込むほど元画像の実ピクセルをそのまま活かせるようにするため)
 let cropRect = null;       // 選択範囲。#cropStage 基準のCSS px
 let cropDrag = null;
 
@@ -989,13 +1006,25 @@ async function runReceiptOcr(canvas){
 
 document.getElementById('cropConfirmBtn').addEventListener('click', () => {
   const s = getCropStageSize();
-  const scale = cropWorkCanvas.width / s.w;
-  const sx = cropRect.x * scale, sy = cropRect.y * scale;
-  const sw = cropRect.w * scale, sh = cropRect.h * scale;
+  // 選択範囲(トリミングUI上の座標)を画像全体に対する割合に変換し、
+  // ダウンスケール済みの表示用画像ではなく、フル解像度の元画像から
+  // 同じ割合の範囲を切り出す。範囲を絞り込むほど、その分だけ元画像の
+  // 実ピクセルをそのまま活かせるため、小さな文字ほどOCR精度が上がる。
+  const fx = cropRect.x / s.w, fy = cropRect.y / s.h;
+  const fw = cropRect.w / s.w, fh = cropRect.h / s.h;
+  const srcX = fx * cropOriginalImage.width, srcY = fy * cropOriginalImage.height;
+  const srcW = fw * cropOriginalImage.width, srcH = fh * cropOriginalImage.height;
+  // 切り出した結果が大きすぎる場合(範囲を広く選んだ場合)のみ、
+  // OCRが重くなりすぎないよう上限まで縮小する
+  const MAX_SIDE = 1600;
+  const outScale = Math.min(1, MAX_SIDE / Math.max(srcW, srcH));
   const finalCanvas = document.createElement('canvas');
-  finalCanvas.width = Math.max(1, Math.round(sw));
-  finalCanvas.height = Math.max(1, Math.round(sh));
-  finalCanvas.getContext('2d').drawImage(cropWorkCanvas, sx, sy, sw, sh, 0, 0, finalCanvas.width, finalCanvas.height);
+  finalCanvas.width = Math.max(1, Math.round(srcW * outScale));
+  finalCanvas.height = Math.max(1, Math.round(srcH * outScale));
+  finalCanvas.getContext('2d').drawImage(
+    cropOriginalImage, srcX, srcY, srcW, srcH,
+    0, 0, finalCanvas.width, finalCanvas.height
+  );
   closeCropModal();
   runReceiptOcr(finalCanvas);
 });
