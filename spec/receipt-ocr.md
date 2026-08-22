@@ -1,7 +1,7 @@
 # レシート読取機能 仕様書
 
 作成日: 2026-08-22
-ステータス: 実装完了(v0.8.2、`docs/index.html` に実装済み)。
+ステータス: 実装完了(v0.8.3、`docs/index.html` に実装済み)。
 実写真での誤認識パターンの分析・対応は
 [receipt-ocr-learnings.md](./receipt-ocr-learnings.md) に記録している。
 

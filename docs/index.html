@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.8.2">
+<meta name="app-version" content="0.8.3">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -741,6 +741,16 @@ function loadTesseract(){
 function fullWidthDigitsToHalf(s){
   return s.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
 }
+/* OCRは数字の「0」をアルファベットの「O」(オー)と誤認識することがある
+   (例: "4,010" → "4.O1O")。数字を含む連続した並び(数字・O・カンマ・
+   ピリオドのみで構成される部分)の中に現れる O/o は「0」とみなして
+   置き換える。数字を1つも含まない並び(単なる英字)は対象外とし、
+   通常の文章中のOを誤って書き換えないようにする。 */
+function normalizeOhToZero(text){
+  return text.replace(/[0-9Oo][0-9Oo,.]*/g, token => {
+    return /[0-9]/.test(token) ? token.replace(/[Oo]/g, '0') : token;
+  });
+}
 /* OCRは桁区切りカンマの前後に余分な空白を入れて認識することがあり
    (例: "4,010" → "4, 010")、そのままだとカンマより前の桁が読み取れず
    末尾の桁だけを金額と誤認してしまう。数字・カンマの間の空白(改行は除く)を
@@ -763,14 +773,15 @@ function collapseNumberFragments(text){
    「合計」等のキーワードで1つに絞り込むのではなく、範囲内に写っている
    金額をすべて候補としてユーザーに提示し、どれを記録するかはユーザー
    自身に選んでもらう方式(仕様変更 v0.8.0)。実際のレシート写真での
-   検証(learnings/receipt-ocr-patterns.md 参照)により、以下の誤認識が
+   検証(spec/receipt-ocr-learnings.md 参照)により、以下の誤認識が
    判明しているため、それぞれ候補の取りこぼしを防ぐよう対応している:
    - ¥記号は "\"(バックスラッシュ)のほか "W" "Y" と誤認識されることがある
    - 桁区切りの「,」が「.」(ピリオド)と誤認識されることがある
    - ¥記号自体が認識されず数字だけが残ることがある
-     → 桁区切り数値(1,234のような形)は¥系記号が無くても候補に含める */
+     → 桁区切り数値(1,234のような形)は¥系記号が無くても候補に含める
+   - 数字の「0」がアルファベットの「O」と誤認識されることがある */
 function extractAllAmountCandidates(text){
-  const collapsed = collapseNumberFragments(fullWidthDigitsToHalf(text));
+  const collapsed = collapseNumberFragments(normalizeOhToZero(fullWidthDigitsToHalf(text)));
   const seen = new Set();
   const results = [];
   const add = (raw) => {
