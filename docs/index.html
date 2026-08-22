@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.7.0">
+<meta name="app-version" content="0.7.1">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -739,10 +739,23 @@ function isRegistrationLabelToken(text){
   const n = fullWidthDigitsToHalf(text);
   return n.includes('登録') || n.includes('番号');
 }
+/* OCRは桁区切りカンマの前後に余分な空白を入れて認識することがあり
+   (例: "4,010" → "4, 010")、そのままだとカンマより前の桁が読み取れず
+   末尾の桁だけを金額と誤認してしまう。数字・カンマの間の空白(改行は除く)を
+   詰めてから解析することでこれを防ぐ。 */
+function collapseNumberFragments(text){
+  return text.replace(/([0-9,])[ \t]+(?=[0-9])/g, '$1');
+}
 function parseAmountToken(text){
-  const t = text.trim();
+  const t = collapseNumberFragments(fullWidthDigitsToHalf(text).trim());
   if(isRegistrationNumberToken(t)) return null;
-  const m = fullWidthDigitsToHalf(t).match(/([0-9][0-9,]{1,})/);
+  // カンマ区切りの数値(通常の金額表記らしいもの)を優先。無ければ単純な数字列。
+  const commaMatch = t.match(/([0-9]{1,3}(?:,[0-9]{3})+)/);
+  if(commaMatch){
+    const v = parseInt(commaMatch[1].replace(/,/g,''), 10);
+    if(v >= 10 && v <= 1000000) return v;
+  }
+  const m = t.match(/([0-9][0-9,]{1,})/);
   if(!m) return null;
   const v = parseInt(m[1].replace(/,/g,''), 10);
   return (v >= 10 && v <= 1000000) ? v : null;
@@ -773,10 +786,12 @@ function extractAmountFromWords(words){
     const rowWords = words
       .filter(w => w !== kw && Math.abs(rowCenter(w) - kwY) <= tolerance)
       .sort((a,b) => a.bbox.x0 - b.bbox.x0); // 左から右の順に確認
-    for(const w of rowWords){
-      const amount = parseAmountToken(w.text);
-      if(amount !== null) return amount;
-    }
+    // OCRが桁区切りカンマの前後で単語を分割してしまうことがあるため
+    // (例: "4,010"が"4,"と"010"の2単語になる)、単語ごとに個別解析するのではなく
+    // 行内の単語をまとめて1つの文字列にしてから金額を探す
+    const rowText = rowWords.map(w => w.text).join(' ');
+    const amount = parseAmountToken(rowText);
+    if(amount !== null) return amount;
   }
   return null;
 }
@@ -808,7 +823,7 @@ function extractAmountFromText(text){
    (レシート全体から「一番大きい数字」を推測するのは事故のもとと分かったが、
    ユーザー自身が金額部分だけに範囲を絞った上での「候補が1つだけ」は安全) */
 function extractSingleAmountCandidate(text){
-  const normalized = fullWidthDigitsToHalf(text);
+  const normalized = collapseNumberFragments(fullWidthDigitsToHalf(text));
   const cleaned = normalized.replace(/[Tt][\s\-]?[0-9][0-9,\-\s]*/g, ' ');
   const nums = [...cleaned.matchAll(/([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{2,6})/g)]
     .map(m => parseInt(m[1].replace(/,/g,''), 10))
