@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.8.0">
+<meta name="app-version" content="0.8.1">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -746,7 +746,16 @@ function fullWidthDigitsToHalf(s){
    末尾の桁だけを金額と誤認してしまう。数字・カンマの間の空白(改行は除く)を
    詰めてから解析することでこれを防ぐ。 */
 function collapseNumberFragments(text){
-  return text.replace(/([0-9,])[ \t]+(?=[0-9])/g, '$1');
+  // フォントが大きい・字間が広いレシート表記(例: 強調された合計金額)では、
+  // OCRが桁ごと・カンマの前後ごとに空白を挟んで認識することがある
+  // (例: "¥5,445" → "¥ 5 , 4 4 5")。数字とカンマが空白を挟んで隣り合って
+  // いる箇所は、これ以上詰められなくなるまで繰り返し詰める。
+  let prev;
+  do {
+    prev = text;
+    text = text.replace(/([0-9,])[ \t　]+(?=[0-9,])/g, '$1');
+  } while(text !== prev);
+  return text;
 }
 
 /* トリミング範囲内から「¥」記号に紐づく金額をすべて列挙する。
@@ -756,7 +765,7 @@ function collapseNumberFragments(text){
    OCRは¥記号を"\"(バックスラッシュ)と誤認識することが多いため両方を許容する。 */
 function extractAllAmountCandidates(text){
   const collapsed = collapseNumberFragments(fullWidthDigitsToHalf(text));
-  const re = /[¥\\][ \t]*([0-9][0-9,]*)/g;
+  const re = /[¥\\][ \t　]*([0-9][0-9,]*)/g;
   const seen = new Set();
   const results = [];
   let m;
