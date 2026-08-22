@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.5.5">
+<meta name="app-version" content="0.5.6">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -37,8 +37,9 @@
     /* Safariでの入力時自動拡大を防ぐため基準フォントを16px以上に */
     font-size:16px;
     -webkit-text-size-adjust:100%;
-    /* 画面下部のスワイプ専用ゾーン(.swipe-zone, 高さ56px)の分だけ余白を確保 */
-    padding-bottom:calc(64px + env(safe-area-inset-bottom));
+    /* 画面下部のスワイプ専用ゾーン(.swipe-zone)の分だけ余白を確保
+       (ゾーンの浮かせ幅10px + 高さ40px + 上側の余白分) */
+    padding-bottom:calc(66px + env(safe-area-inset-bottom));
   }
   input,textarea,select{
     font-size:16px; /* Safari拡大防止の要 */
@@ -57,12 +58,15 @@
 
   main{max-width:480px; margin:0 auto; padding:14px 12px;}
 
-  /* 画面下部のスワイプ専用ゾーン(タブ切替) */
+  /* 画面下部のスワイプ専用ゾーン(タブ切替)。
+     iOSのホームインジケーター(画面最下端のスワイプでホームに戻るジェスチャー領域)と
+     干渉しないよう、最下端には張り付けずに少し上に浮かせて配置する。 */
   .swipe-zone{
-    position:fixed; left:0; right:0; bottom:0; z-index:5;
-    height:56px; padding-bottom:env(safe-area-inset-bottom);
+    position:fixed; left:12px; right:12px; z-index:5;
+    bottom:calc(10px + env(safe-area-inset-bottom));
+    height:40px;
     display:flex; align-items:center; justify-content:center; gap:14px;
-    background:var(--surface); border-top:0.5px solid var(--border);
+    background:var(--surface); border:0.5px solid var(--border); border-radius:var(--radius);
   }
   .swipe-zone .swipe-handle{
     width:36px; height:4px; border-radius:2px; background:var(--border-strong);
