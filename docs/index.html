@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.7.1">
+<meta name="app-version" content="0.7.2">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -761,37 +761,44 @@ function parseAmountToken(text){
   return (v >= 10 && v <= 1000000) ? v : null;
 }
 
-/* レシートは必ず「合計」の文言があり、その横(同じ行=同じY座標帯)に金額が
-   書かれているという前提で、OCRの単語ごとの座標(bbox)を使って
-   「合計」と同じ行にある金額を最優先で抽出する。
-   (テキストの改行位置だけに頼ると、ラベルと金額の間の大きな空白でずれることがあるため)
-   「登録番号」の行(同じY座標帯)にある単語、およびT+数字の登録番号らしき
-   トークンは、金額候補から除外する。 */
+/* OCRの単語ごとの座標(bbox)を、Y座標が近いものどうしで「行」にグルーピングする。
+   1つの単語ずつではなく行単位でまとめて扱うことで、
+   「合計」が"合"と"計"のように複数単語に分割されてしまった場合や、
+   金額が桁区切りカンマの前後で複数単語に分割されてしまった場合でも
+   まとめて認識できるようにする。 */
+function groupWordsIntoRows(words){
+  const sorted = [...words].sort((a,b) => (a.bbox.y0+a.bbox.y1) - (b.bbox.y0+b.bbox.y1));
+  const rows = [];
+  for(const w of sorted){
+    const wy = (w.bbox.y0 + w.bbox.y1) / 2;
+    const wh = w.bbox.y1 - w.bbox.y0;
+    const row = rows.find(r => Math.abs(r.y - wy) <= Math.max(wh, r.h) * 0.7 + 6);
+    if(row){
+      row.words.push(w);
+      row.y = (row.y * (row.words.length - 1) + wy) / row.words.length;
+      row.h = Math.max(row.h, wh);
+    } else {
+      rows.push({ y: wy, h: wh, words: [w] });
+    }
+  }
+  return rows;
+}
+
+/* レシートは必ず「合計」の文言があり、その横(同じ行)に金額が書かれている
+   という前提で、OCRの単語ごとの座標(bbox)を行単位にまとめた上で、
+   「合計」を含む行から金額を最優先で抽出する。
+   「登録番号」を含む行は除外する。 */
 function extractAmountFromWords(words){
   if(!words || !words.length) return null;
-  const rowCenter = w => (w.bbox.y0 + w.bbox.y1) / 2;
-  const rowHeight = w => (w.bbox.y1 - w.bbox.y0);
-
-  const labelWords = words.filter(w => w.text && isRegistrationLabelToken(w.text));
-  const excludedRows = labelWords.map(w => ({ y: rowCenter(w), tol: rowHeight(w) * 0.6 + 4 }));
-  const isExcludedRow = (w) => excludedRows.some(r => Math.abs(rowCenter(w) - r.y) <= r.tol);
-
-  const keywordWords = words.filter(w => w.text
-    && RECEIPT_KEYWORDS.some(kw => fullWidthDigitsToHalf(w.text).includes(kw))
-    && !isRegistrationLabelToken(w.text));
-  for(const kw of keywordWords){
-    if(isExcludedRow(kw)) continue;
-    const kwY = rowCenter(kw);
-    const tolerance = rowHeight(kw) * 0.6 + 4; // 同じ行とみなす許容誤差
-    const rowWords = words
-      .filter(w => w !== kw && Math.abs(rowCenter(w) - kwY) <= tolerance)
-      .sort((a,b) => a.bbox.x0 - b.bbox.x0); // 左から右の順に確認
-    // OCRが桁区切りカンマの前後で単語を分割してしまうことがあるため
-    // (例: "4,010"が"4,"と"010"の2単語になる)、単語ごとに個別解析するのではなく
-    // 行内の単語をまとめて1つの文字列にしてから金額を探す
-    const rowText = rowWords.map(w => w.text).join(' ');
-    const amount = parseAmountToken(rowText);
-    if(amount !== null) return amount;
+  const rows = groupWordsIntoRows(words);
+  for(const row of rows){
+    const rowText = [...row.words].sort((a,b) => a.bbox.x0 - b.bbox.x0).map(w => w.text).join(' ');
+    const compact = fullWidthDigitsToHalf(rowText).replace(/[ \t]+/g, '');
+    if(compact.includes('登録') || compact.includes('番号')) continue;
+    if(RECEIPT_KEYWORDS.some(kw => compact.includes(kw))){
+      const amount = parseAmountToken(rowText);
+      if(amount !== null) return amount;
+    }
   }
   return null;
 }
@@ -806,12 +813,13 @@ function extractAmountFromWords(words){
 function extractAmountFromText(text){
   const normalized = fullWidthDigitsToHalf(text);
   const lines = normalized.split(/\n/).filter(line => !isRegistrationLabelToken(line));
-  for(const kw of RECEIPT_KEYWORDS){
-    for(const line of lines){
-      if(line.includes(kw)){
-        const amount = parseAmountToken(line);
-        if(amount !== null) return amount;
-      }
+  for(const line of lines){
+    // OCRが「合計」を「合 計」のように分割して認識することがあるため、
+    // キーワード判定時のみ空白を除去してから比較する(金額の解析には元の行を渡す)
+    const compact = line.replace(/[ \t]+/g, '');
+    if(RECEIPT_KEYWORDS.some(kw => compact.includes(kw))){
+      const amount = parseAmountToken(line);
+      if(amount !== null) return amount;
     }
   }
   return null;
