@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.8.3">
+<meta name="app-version" content="0.9.0">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -38,8 +38,8 @@
     font-size:16px;
     -webkit-text-size-adjust:100%;
     /* 画面下部のスワイプ専用ゾーン(.swipe-zone)の分だけ余白を確保
-       (ゾーンの浮かせ幅24px + 高さ56px + 上側の余白分) */
-    padding-bottom:calc(92px + env(safe-area-inset-bottom));
+       (ゾーンの浮かせ幅40px + 高さ56px + 上側の余白分) */
+    padding-bottom:calc(108px + env(safe-area-inset-bottom));
   }
   input,textarea,select{
     font-size:16px; /* Safari拡大防止の要 */
@@ -53,8 +53,12 @@
     background:var(--surface);
     border-bottom:0.5px solid var(--border);
     position:sticky; top:0; z-index:10;
+    display:flex; align-items:center; justify-content:space-between;
   }
   header.app-header h1{font-size:15px; font-weight:600;}
+  .header-icon-btn{
+    background:none; border:0; font-size:18px; color:var(--text-sub); padding:2px 4px; line-height:1;
+  }
 
   main{max-width:480px; margin:0 auto; padding:14px 12px;}
 
@@ -63,7 +67,7 @@
      干渉しないよう、最下端には張り付けずに少し上に浮かせて配置する。 */
   .swipe-zone{
     position:fixed; left:12px; right:12px; z-index:5;
-    bottom:calc(24px + env(safe-area-inset-bottom));
+    bottom:calc(40px + env(safe-area-inset-bottom));
     height:56px;
     display:flex; align-items:center; justify-content:center; gap:14px;
     background:var(--surface); border:0.5px solid var(--border); border-radius:var(--radius);
@@ -76,6 +80,9 @@
     transition:opacity .15s;
   }
   .swipe-zone .swipe-arrow.disabled{ opacity:0.25; }
+
+  .import-msg{font-size:12px; color:var(--c-green); text-align:center; margin-top:10px;}
+  .import-msg.error-msg{color:var(--danger);}
 
   /* タブバー */
   nav.tabbar{
@@ -274,7 +281,10 @@
 </head>
 <body>
 
-<header class="app-header"><h1>Spending-Log</h1></header>
+<header class="app-header">
+  <h1>Spending-Log</h1>
+  <button class="header-icon-btn" id="settingsBtn" aria-label="データのバックアップ/復元">⚙</button>
+</header>
 
 <main>
   <nav class="tabbar">
@@ -449,6 +459,25 @@
       <button class="btn-record" id="confirmCancel" style="background:var(--border); color:var(--text);">キャンセル</button>
       <button class="btn-record enabled" id="confirmOk" style="background:var(--danger);">削除する</button>
     </div>
+  </div>
+</div>
+
+<!-- データのバックアップ/復元モーダル -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal-sheet">
+    <div class="modal-head">
+      <span>データのバックアップ/復元</span>
+      <button class="close" id="closeSettings">✕</button>
+    </div>
+    <p class="crop-hint">記録はこの端末のブラウザ内にのみ保存されています。機種変更やブラウザのキャッシュ削除に備えて、定期的にバックアップをおすすめします。</p>
+    <div class="action-row">
+      <button class="btn-record enabled" id="exportBtn">エクスポート(バックアップを保存)</button>
+    </div>
+    <div class="action-row">
+      <button class="btn-record" id="importBtn" style="background:var(--border); color:var(--text);">インポート(バックアップから復元)</button>
+    </div>
+    <input type="file" id="importFileInput" accept="application/json,.json" style="display:none;">
+    <p class="import-msg" id="importMsg" style="display:none;"></p>
   </div>
 </div>
 
@@ -1076,6 +1105,78 @@ document.getElementById('confirmOk').addEventListener('click', () => {
   saveRecords(records);
   confirmModal.classList.remove('open');
   entryModal.classList.remove('open');
+});
+
+/* ---------- データのバックアップ/復元 ----------
+   端末のブラウザ内(localStorage)にしかデータが無いため、機種変更や
+   キャッシュ削除に備えてJSONファイルへのエクスポート/インポートを提供する。
+   姉妹アプリ fuel-log の同機能と同じ設計方針(詳細は spec/backup-restore.md)。 */
+const settingsModal = document.getElementById('settingsModal');
+function openSettingsModal(){
+  const msg = document.getElementById('importMsg');
+  msg.style.display = 'none';
+  msg.classList.remove('error-msg');
+  settingsModal.classList.add('open');
+}
+function closeSettingsModal(){
+  settingsModal.classList.remove('open');
+}
+document.getElementById('settingsBtn').addEventListener('click', openSettingsModal);
+document.getElementById('closeSettings').addEventListener('click', closeSettingsModal);
+
+function showImportMsg(msg, isError){
+  const el = document.getElementById('importMsg');
+  el.textContent = msg;
+  el.classList.toggle('error-msg', !!isError);
+  el.style.display = 'block';
+}
+
+function exportData(){
+  const payload = { version: 1, exportedAt: nowIso(), records };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const d = new Date();
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `spending-log-backup-${d.getFullYear()}${pad2(d.getMonth()+1)}${pad2(d.getDate())}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function importDataFile(file){
+  const reader = new FileReader();
+  reader.onload = () => {
+    let data;
+    try{
+      data = JSON.parse(reader.result);
+    }catch(e){
+      showImportMsg('ファイルの読み込みに失敗しました。正しいバックアップファイルか確認してください。', true);
+      return;
+    }
+    if(!data || !Array.isArray(data.records)){
+      showImportMsg('バックアップファイルの形式が正しくありません。', true);
+      return;
+    }
+    if(!confirm('現在の記録をすべて置き換えます。よろしいですか?')) return;
+
+    records = data.records;
+    viewYear = today.getFullYear();
+    viewMonth = today.getMonth() + 1;
+    saveRecords(records); // 内部でlocalStorageへの保存と再描画を行う
+    showImportMsg('復元しました。', false);
+  };
+  reader.onerror = () => showImportMsg('ファイルの読み込みに失敗しました。', true);
+  reader.readAsText(file);
+}
+
+document.getElementById('exportBtn').addEventListener('click', exportData);
+document.getElementById('importBtn').addEventListener('click', () => document.getElementById('importFileInput').click());
+document.getElementById('importFileInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if(file) importDataFile(file);
+  e.target.value = '';
 });
 
 /* ---------- 日別・大項目別 レコード一覧モーダル ---------- */
