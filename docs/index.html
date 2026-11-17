@@ -5,7 +5,7 @@
 <!-- Safari対策: user-scalable=no + font-size>=16pxで入力時の自動拡大を防止 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spending-Log</title>
-<meta name="app-version" content="0.9.0">
+<meta name="app-version" content="0.10.0">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -466,7 +466,7 @@
 <div class="modal-overlay" id="settingsModal">
   <div class="modal-sheet">
     <div class="modal-head">
-      <span>データのバックアップ/復元</span>
+      <span>データ管理(バックアップ/光熱費取込)</span>
       <button class="close" id="closeSettings">✕</button>
     </div>
     <p class="crop-hint">記録はこの端末のブラウザ内にのみ保存されています。機種変更やブラウザのキャッシュ削除に備えて、定期的にバックアップをおすすめします。</p>
@@ -476,7 +476,12 @@
     <div class="action-row">
       <button class="btn-record" id="importBtn" style="background:var(--border); color:var(--text);">インポート(バックアップから復元)</button>
     </div>
+    <p class="crop-hint" style="margin-top:16px;">光熱費取込: 毎月届く光熱費ファイル(spending-log-utilities-*.json)を選ぶと、電気代・ガス代・水道代を追加/更新します。手入力の記録は消えません。</p>
+    <div class="action-row">
+      <button class="btn-record" id="utilImportBtn" style="background:var(--c-green); color:#fff;">光熱費取込(ファイルを選択)</button>
+    </div>
     <input type="file" id="importFileInput" accept="application/json,.json" style="display:none;">
+    <input type="file" id="utilImportFileInput" accept="application/json,.json" style="display:none;">
     <p class="import-msg" id="importMsg" style="display:none;"></p>
   </div>
 </div>
@@ -1176,6 +1181,92 @@ document.getElementById('importBtn').addEventListener('click', () => document.ge
 document.getElementById('importFileInput').addEventListener('change', (e) => {
   const file = e.target.files[0];
   if(file) importDataFile(file);
+  e.target.value = '';
+});
+
+/* ---------- 光熱費取込(v0.10.0) ----------
+   定期実行(エネモール等から取得)が出力する光熱費ファイルを取り込む。
+   バックアップ復元と異なり全置き換えはせず、id単位で追加/更新(upsert)する。
+   詳細は spec/utilities-import.md。 */
+const UTIL_FILE_TYPE = 'spending-log-utilities';
+const UTIL_SUBS = CATS['光熱費'].subs;
+
+function validateUtilItem(it){
+  return it && typeof it.id === 'string' && it.id.startsWith('util-')
+    && /^\d{4}-\d{2}-\d{2}$/.test(it.date || '')
+    && UTIL_SUBS.includes(it.subCategory)
+    && Number.isInteger(it.amount) && it.amount > 0;
+}
+
+function planUtilImport(items){
+  const plan = { add:[], update:[], same:[], dupWarn:[] };
+  for(const it of items){
+    const memo = String(it.memo || '').slice(0, 50);
+    const cur = records.find(r => r.id === it.id);
+    if(!cur){
+      plan.add.push({ ...it, memo });
+      // 同じ月・同じ小項目に手入力の光熱費があれば二重計上の恐れとして警告
+      const ym = it.date.slice(0, 7);
+      const dup = records.find(r => !String(r.id).startsWith('util-') && r.category === '光熱費'
+        && r.subCategory === it.subCategory && String(r.date).slice(0, 7) === ym);
+      if(dup) plan.dupWarn.push(`${ym} ${it.subCategory}`);
+    }else if(cur.date !== it.date || cur.amount !== it.amount || (cur.memo || '') !== memo || cur.subCategory !== it.subCategory){
+      plan.update.push({ ...it, memo });
+    }else{
+      plan.same.push(it);
+    }
+  }
+  return plan;
+}
+
+function applyUtilImport(plan){
+  const now = nowIso();
+  for(const it of plan.add){
+    records.push({ id: it.id, date: it.date, category: '光熱費', subCategory: it.subCategory,
+      amount: it.amount, memo: it.memo, createdAt: now, updatedAt: now });
+  }
+  for(const it of plan.update){
+    const rec = records.find(r => r.id === it.id);
+    rec.date = it.date; rec.category = '光熱費'; rec.subCategory = it.subCategory;
+    rec.amount = it.amount; rec.memo = it.memo; rec.updatedAt = now;
+  }
+  saveRecords(records);
+}
+
+function importUtilFile(file){
+  const reader = new FileReader();
+  reader.onload = () => {
+    let data;
+    try{ data = JSON.parse(reader.result); }
+    catch(e){ showImportMsg('ファイルの読み込みに失敗しました。', true); return; }
+    if(!data || data.type !== UTIL_FILE_TYPE || !Array.isArray(data.items)){
+      showImportMsg('光熱費ファイルの形式が正しくありません(バックアップファイルは上の「インポート」から復元してください)。', true);
+      return;
+    }
+    const bad = data.items.filter(it => !validateUtilItem(it));
+    if(bad.length){ showImportMsg(`不正なデータが${bad.length}件含まれているため取り込みを中止しました。`, true); return; }
+
+    const plan = planUtilImport(data.items);
+    if(!plan.add.length && !plan.update.length){
+      showImportMsg(`変更はありません(${plan.same.length}件は取込済み)。`, false);
+      return;
+    }
+    let msg = `光熱費を取り込みます。\n追加: ${plan.add.length}件 / 更新: ${plan.update.length}件 / 変更なし: ${plan.same.length}件`;
+    if(plan.dupWarn.length){
+      msg += `\n\n注意: 次の月には手入力の光熱費があり、二重計上になる可能性があります。\n${[...new Set(plan.dupWarn)].join('\n')}`;
+    }
+    if(!confirm(msg)) return;
+    applyUtilImport(plan);
+    showImportMsg(`取り込みました(追加${plan.add.length}件・更新${plan.update.length}件)。`, false);
+  };
+  reader.onerror = () => showImportMsg('ファイルの読み込みに失敗しました。', true);
+  reader.readAsText(file);
+}
+
+document.getElementById('utilImportBtn').addEventListener('click', () => document.getElementById('utilImportFileInput').click());
+document.getElementById('utilImportFileInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if(file) importUtilFile(file);
   e.target.value = '';
 });
 

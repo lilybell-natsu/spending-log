@@ -1,6 +1,6 @@
 /* Spending-Log service worker
    ファイル更新のたびに CACHE_NAME のバージョンを上げること */
-const CACHE_NAME = 'spending-log-cache-v2';
+const CACHE_NAME = 'spending-log-cache-v3';
 const ASSETS = [
   './',
   './index.html',
