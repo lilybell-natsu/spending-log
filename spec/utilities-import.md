@@ -27,7 +27,7 @@
   "generatedAt": "2026-11-17T22:20:00+09:00",
   "items": [
     { "id": "util-electric-2026-10", "date": "2026-10-20", "subCategory": "電気代",
-      "amount": 8776, "memo": "10月分 213kWh 9/18-10/19", "status": "確定", "source": "ほくでんエネモール" }
+      "amount": 5000, "memo": "10月分 100kWh 9/1-9/30", "status": "確定", "source": "ほくでんエネモール" }
   ]
 }
 ```
