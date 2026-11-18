@@ -1,0 +1,12 @@
+# 公開リポジトリに含めないもの
+
+# 光熱費自動取得の引継ぎ資料・手順書(契約番号・アカウント・実際の請求額を含む)
+spec/utilities-fetch-handover.md
+spec/utilities-fetch-runbook.md
+
+# 実際の請求データを含む光熱費取込ファイル・実行記録
+spending-log-utilities-*.json
+private/
+
+# ローカル開発ツールの設定
+.claude/

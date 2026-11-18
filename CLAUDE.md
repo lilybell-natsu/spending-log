@@ -21,3 +21,15 @@
   - コミット・push・公開URLへの反映有無
 - 作業完了後(ユーザーへの報告と合わせて)、都度このログファイルを作成/更新すること。
   ユーザーから明示的な指示がなくても、このプロジェクトでの作業ごとに自動的に行う。
+
+## 光熱費の自動取得(2026-11-18 Claude Codeへ移行)
+
+電気・ガス代を毎月エネモールから取得し、`光熱費取込`用のJSONを作成してGoogleドライブに保存する
+処理を、claude.aiの定期実行からClaude Codeへ移行する。経緯・サイト構造・ファイル仕様・
+ドライブのフォルダID・未完了事項は `spec/utilities-fetch-handover.md` にまとめてある。
+作業開始時は必ずこの資料を読むこと。取込ファイルの形式は `spec/utilities-import.md` に従う。
+
+- 実行はClaude Codeの定期実行 `spending-log-utilities-monthly`(毎月20日 21:13)。
+  手順は `spec/utilities-fetch-runbook.md`、実行記録は `private/utilities-fetch-runs.md`
+- 引継ぎ資料・手順書・`private/`・取込JSONは契約番号や実際の請求額を含むため
+  `.gitignore` で除外している。公開リポジトリ(`log/` を含む)に実データを書かないこと
